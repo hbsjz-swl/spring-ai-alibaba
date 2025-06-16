@@ -15,32 +15,12 @@
  */
 package com.alibaba.cloud.ai.graph.node;
 
-import java.lang.reflect.Type;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import com.alibaba.cloud.ai.graph.exception.NodeInterruptException;
 import com.alibaba.cloud.ai.graph.utils.InMemoryFileStorage;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonSyntaxException;
-import com.google.gson.reflect.TypeToken;
-import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry;
-
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -55,6 +35,22 @@ import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class HttpNode implements NodeAction {
 
@@ -169,12 +165,11 @@ public class HttpNode implements NodeAction {
 					throw new HttpNodeException("JSON body must contain exactly one item");
 				}
 				String jsonTemplate = replaceVariables(body.getData().get(0).getValue(), state);
-				Gson gson = new GsonBuilder().setLenient().create();
 				Object jsonObject;
 				try {
-					jsonObject = gson.fromJson(jsonTemplate, Object.class);
+					jsonObject = new ObjectMapper().readValue(jsonTemplate, Object.class);
 				}
-				catch (JsonSyntaxException e) {
+				catch (com.fasterxml.jackson.core.JsonProcessingException e) {
 					throw new HttpNodeException("Failed to parse JSON body: " + e.getMessage());
 				}
 				requestSpec.headers(h -> h.setContentType(MediaType.APPLICATION_JSON));
@@ -266,12 +261,11 @@ public class HttpNode implements NodeAction {
 		else {
 			String text = new String(body, StandardCharsets.UTF_8);
 			try {
-				Type mapType = new TypeToken<Map<String, Object>>() {
-				}.getType();
-				Map<String, Object> map = new Gson().fromJson(text, mapType);
+				ObjectMapper objectMapper = new ObjectMapper();
+				Map<String, Object> map = objectMapper.readValue(text, Map.class);
 				result.put("body", map);
 			}
-			catch (JsonSyntaxException ex) {
+			catch (Exception ex) {
 				result.put("body", text);
 			}
 		}
@@ -408,7 +402,7 @@ public class HttpNode implements NodeAction {
 			this.data = data != null ? data : List.of();
 		}
 
-		public static HttpRequestNodeBody from(Object raw) {
+		public static HttpRequestNodeBody from(Object raw) throws JsonProcessingException {
 			if (raw == null) {
 				return new HttpRequestNodeBody(BodyType.NONE, null);
 			}
@@ -455,7 +449,8 @@ public class HttpNode implements NodeAction {
 
 					case JSON:
 						if (dataField instanceof Map<?, ?> || dataField instanceof List<?>) {
-							String jsonString = new com.google.gson.Gson().toJson(dataField);
+							ObjectMapper objectMapper = new ObjectMapper();
+							String jsonString = objectMapper.writeValueAsString(dataField);
 							BodyData bd2 = new BodyData();
 							bd2.setType(BodyType.JSON);
 							bd2.setValue(jsonString);

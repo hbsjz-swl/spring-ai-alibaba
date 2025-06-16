@@ -17,18 +17,23 @@
 package com.alibaba.cloud.ai.service.dsl.nodes;
 
 import com.alibaba.cloud.ai.graph.node.HttpNode.AuthConfig;
-import com.alibaba.cloud.ai.graph.node.HttpNode.TimeoutConfig;
 import com.alibaba.cloud.ai.graph.node.HttpNode.HttpRequestNodeBody;
 import com.alibaba.cloud.ai.graph.node.HttpNode.RetryConfig;
+import com.alibaba.cloud.ai.graph.node.HttpNode.TimeoutConfig;
 import com.alibaba.cloud.ai.model.VariableSelector;
 import com.alibaba.cloud.ai.model.workflow.NodeType;
 import com.alibaba.cloud.ai.model.workflow.nodedata.HttpNodeData;
 import com.alibaba.cloud.ai.service.dsl.AbstractNodeDataConverter;
 import com.alibaba.cloud.ai.service.dsl.DSLDialectType;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -61,7 +66,7 @@ public class HttpNodeDataConverter extends AbstractNodeDataConverter<HttpNodeDat
 
 			@SuppressWarnings("unchecked")
 			@Override
-			public HttpNodeData parse(Map<String, Object> data) {
+			public HttpNodeData parse(Map<String, Object> data) throws JsonProcessingException {
 				List<VariableSelector> inputs = Optional.ofNullable((List<String>) data.get("variable_selector"))
 					.filter(list -> list.size() == 2)
 					.map(list -> Collections.singletonList(new VariableSelector(list.get(0), list.get(1))))

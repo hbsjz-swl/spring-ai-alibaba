@@ -26,7 +26,7 @@ import java.util.List;
  * @author ViliamSun
  * @since 2025/5/18 17:48
  */
-public class Plan{
+public class Plan {
 
 	private String title;
 
@@ -37,112 +37,69 @@ public class Plan{
 
 	private List<Step> steps;
 
-	public Plan() {
-	}
+	public static class Step {
 
-	public Plan(String title, boolean hasEnoughContext, String thought, List<Step> steps) {
-		this.title = title;
-		this.hasEnoughContext = hasEnoughContext;
-		this.thought = thought;
-		this.steps = steps;
-	}
+		@JsonProperty("need_web_search")
+		private boolean needWebSearch;
 
-	public String getTitle() {
-		return title;
-	}
+		private String title;
 
-	public String getThought() {
-		return thought;
-	}
+		private String description;
 
-	public List<Step> getSteps() {
-		return steps;
-	}
+		@JsonProperty("step_type")
+		private StepType stepType;
 
-	public void setTitle(String title) {
-		this.title = title;
-	}
-
-	public void setHasEnoughContext(boolean hasEnoughContext) {
-		this.hasEnoughContext = hasEnoughContext;
-	}
-
-	public void setThought(String thought) {
-		this.thought = thought;
-	}
-
-	public void setSteps(List<Step> steps) {
-		this.steps = steps;
-	}
-
-	public record Step(@JsonProperty("need_web_search")
-					   boolean needWebSearch,
-					   String title,
-					   String description,
-					   @JsonProperty("step_type")
-					   StepType stepType,
-					   String executionRes) {
-
-		public Step {
-		}
-
-		public static Builder builder() {
-			return new Builder();
-		}
-
-		public Builder mutate(){
-			return new Builder()
-					.needWebSearch(needWebSearch)
-					.title(title)
-					.description(description)
-					.stepType(stepType)
-					.executionRes(executionRes);
-		}
-
-		public static final class Builder {
-
-			private boolean needWebSearch;
-			private String title;
-			private String description;
-			private StepType stepType;
-			private String executionRes;
-
-			private Builder(){
-			}
-
-			public Builder needWebSearch(boolean needWebSearch) {
-				this.needWebSearch = needWebSearch;
-				return this;
-			}
-
-			public Builder title(String title) {
-				this.title = title;
-				return this;
-			}
-
-			public Builder description(String description) {
-				this.description = description;
-				return this;
-			}
-
-			public Builder stepType(StepType stepType) {
-				this.stepType = stepType;
-				return this;
-			}
-
-			public Builder executionRes(String executionRes) {
-				this.executionRes = executionRes;
-				return this;
-			}
-
-			public Step build() {
-				return new Step(needWebSearch, title, description, stepType, executionRes);
-			}
-
-		}
-
+		private String executionRes;
 
 		private String executionStatus;
+
+		public boolean isNeedWebSearch() {
+			return needWebSearch;
+		}
+
+		public void setNeedWebSearch(boolean needWebSearch) {
+			this.needWebSearch = needWebSearch;
+		}
+
+		public String getTitle() {
+			return title;
+		}
+
+		public void setTitle(String title) {
+			this.title = title;
+		}
+
+		public String getDescription() {
+			return description;
+		}
+
+		public void setDescription(String description) {
+			this.description = description;
+		}
+
+		public StepType getStepType() {
+			return stepType;
+		}
+
+		public void setStepType(StepType stepType) {
+			this.stepType = stepType;
+		}
+
+		public String getExecutionRes() {
+			return executionRes;
+		}
+
+		public void setExecutionRes(String executionRes) {
+			this.executionRes = executionRes;
+		}
+
+		public String getExecutionStatus() {
+			return executionStatus;
+		}
+
+		public void setExecutionStatus(String executionStatus) {
+			this.executionStatus = executionStatus;
+		}
 
 	}
 
@@ -150,10 +107,40 @@ public class Plan{
 
 		@JsonProperty("research")
 		@JsonAlias("RESEARCH")
-		RESEARCH, @JsonProperty("processing")
+		RESEARCH,
+
+		@JsonProperty("processing")
 		@JsonAlias("PROCESSING")
 		PROCESSING
 
+	}
+
+	public String getTitle() {
+		return title;
+	}
+
+	public void setTitle(String title) {
+		this.title = title;
+	}
+
+	public String getThought() {
+		return thought;
+	}
+
+	public void setThought(String thought) {
+		this.thought = thought;
+	}
+
+	public List<Step> getSteps() {
+		return steps;
+	}
+
+	public void setSteps(List<Step> steps) {
+		this.steps = steps;
+	}
+
+	public void setHasEnoughContext(boolean hasEnoughContext) {
+		this.hasEnoughContext = hasEnoughContext;
 	}
 
 	public boolean isHasEnoughContext() {

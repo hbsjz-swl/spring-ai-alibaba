@@ -18,6 +18,7 @@ package com.alibaba.cloud.ai.graph;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig;
 import com.alibaba.cloud.ai.graph.action.Command;
+import com.alibaba.cloud.ai.graph.async.AsyncGenerator;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import com.alibaba.cloud.ai.graph.checkpoint.Checkpoint;
 import com.alibaba.cloud.ai.graph.exception.GraphInitKeyErrorException;
@@ -27,13 +28,22 @@ import com.alibaba.cloud.ai.graph.internal.edge.EdgeValue;
 import com.alibaba.cloud.ai.graph.internal.node.ParallelNode;
 import com.alibaba.cloud.ai.graph.state.StateSnapshot;
 import com.alibaba.cloud.ai.graph.streaming.AsyncGeneratorUtils;
-import org.bsc.async.AsyncGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.CollectionUtils;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.LinkedBlockingDeque;
@@ -42,7 +52,9 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.alibaba.cloud.ai.graph.StateGraph.*;
+import static com.alibaba.cloud.ai.graph.StateGraph.END;
+import static com.alibaba.cloud.ai.graph.StateGraph.ERROR;
+import static com.alibaba.cloud.ai.graph.StateGraph.START;
 import static java.lang.String.format;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.stream.Collectors.toList;
@@ -619,7 +631,7 @@ public class CompiledGraph {
 				this.currentState = getInitialState(inputs, config);
 				this.overAllState = overAllState.input(currentState);
 				this.nextNodeId = null;
-				this.currentNodeId = StateGraph.START;
+				this.currentNodeId = START;
 				this.config = config;
 			}
 		}
@@ -669,12 +681,24 @@ public class CompiledGraph {
 		 */
 		private Optional<Data<Output>> getEmbedGenerator(Map<String, Object> partialState) {
 			// Extract all AsyncGenerator instances
-			var generatorEntries = partialState.entrySet()
-				.stream()
-				.filter(e -> e.getValue() instanceof AsyncGenerator)
-				.collect(Collectors.toList());
+			List<AsyncGenerator<Output>> asyncNodeGenerators = new ArrayList<>();
+			var generatorEntries = partialState.entrySet().stream().filter(e -> {
+				// Fixed when parallel nodes return asynchronous generating the same key
+				Object value = e.getValue();
+				if (value instanceof AsyncGenerator) {
+					return true;
+				}
+				if (value instanceof Collection collection) {
+					collection.forEach(o -> {
+						if (o instanceof AsyncGenerator<?>) {
+							asyncNodeGenerators.add((AsyncGenerator<Output>) o);
+						}
+					});
+				}
+				return false;
+			}).collect(Collectors.toList());
 
-			if (generatorEntries.isEmpty()) {
+			if (generatorEntries.isEmpty() && asyncNodeGenerators.isEmpty()) {
 				return Optional.empty();
 			}
 
@@ -685,7 +709,8 @@ public class CompiledGraph {
 			}
 
 			// Create appropriate generator (single or merged)
-			AsyncGenerator<Output> generator = AsyncGeneratorUtils.createAppropriateGenerator(generatorEntries);
+			AsyncGenerator<Output> generator = AsyncGeneratorUtils.createAppropriateGenerator(generatorEntries,
+					asyncNodeGenerators, keyStrategyMap);
 
 			// Create data processing logic for the generator
 			return Optional.of(Data.composeWith(generator.map(n -> {
@@ -704,22 +729,45 @@ public class CompiledGraph {
 		@SuppressWarnings("unchecked")
 		private void processGeneratorOutput(Object data, Map<String, Object> partialState,
 				List<Map.Entry<String, Object>> generatorEntries) throws Exception {
+			// Remove all generators
+			Map<String, Object> partialStateWithoutGenerators = new HashMap<>();
+			for (Map.Entry<String, Object> entry : partialState.entrySet()) {
+				if (entry.getValue() instanceof AsyncGenerator) {
+					continue; // Skip top-level AsyncGenerator values
+				}
+
+				if (entry.getValue() instanceof Collection<?>) {
+					Collection<?> collection = (Collection<?>) entry.getValue();
+					ArrayList<Object> filteredCollection = new ArrayList<>();
+
+					for (Object item : collection) {
+						if (!(item instanceof AsyncGenerator)) {
+							filteredCollection.add(item);
+						}
+					}
+
+					if (!filteredCollection.isEmpty()) {
+						partialStateWithoutGenerators.put(entry.getKey(), filteredCollection);
+					}
+				}
+				else {
+					// Keep the entry if it's not an AsyncGenerator and not a collection
+					// containing it
+					partialStateWithoutGenerators.put(entry.getKey(), entry.getValue());
+				}
+			}
+
+			// Update state with partial state without generators
+			var intermediateState = OverAllState.updateState(currentState, partialStateWithoutGenerators,
+					keyStrategyMap);
+			currentState = intermediateState;
+			overAllState.updateState(partialStateWithoutGenerators);
+
+			// If data is not null and is a Map, update state with it
 			if (data != null) {
 				if (data instanceof Map<?, ?>) {
-					// Remove all generators
-					var partialStateWithoutGenerators = partialState.entrySet()
-						.stream()
-						.filter(e -> !(e.getValue() instanceof AsyncGenerator))
-						.collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-
-					// Update state
-					var intermediateState = OverAllState.updateState(currentState, partialStateWithoutGenerators,
-							keyStrategyMap);
 					currentState = OverAllState.updateState(intermediateState, (Map<String, Object>) data,
 							keyStrategyMap);
-
-					// Update global state
-					overAllState.updateState(partialStateWithoutGenerators);
 					overAllState.updateState((Map<String, Object>) data);
 
 					if (log.isDebugEnabled() && generatorEntries.size() > 1) {

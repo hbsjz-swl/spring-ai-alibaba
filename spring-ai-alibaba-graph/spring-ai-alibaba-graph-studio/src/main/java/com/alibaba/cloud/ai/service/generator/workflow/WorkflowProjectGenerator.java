@@ -18,7 +18,11 @@ package com.alibaba.cloud.ai.service.generator.workflow;
 import com.alibaba.cloud.ai.model.App;
 import com.alibaba.cloud.ai.model.AppModeEnum;
 import com.alibaba.cloud.ai.model.Variable;
-import com.alibaba.cloud.ai.model.workflow.*;
+import com.alibaba.cloud.ai.model.workflow.Node;
+import com.alibaba.cloud.ai.model.workflow.NodeData;
+import com.alibaba.cloud.ai.model.workflow.NodeType;
+import com.alibaba.cloud.ai.model.workflow.Edge;
+import com.alibaba.cloud.ai.model.workflow.Workflow;
 import com.alibaba.cloud.ai.model.workflow.nodedata.QuestionClassifierNodeData;
 import com.alibaba.cloud.ai.service.dsl.DSLAdapter;
 import com.alibaba.cloud.ai.service.generator.GraphProjectDescription;
@@ -175,13 +179,13 @@ public class WorkflowProjectGenerator implements ProjectGenerator {
 
 			// START and END special handling
 			if ("start".equals(sourceType)) {
-				sb.append(String.format("        stateGraph.addEdge(START, \"%s\");%n", targetId));
+				sb.append(String.format("stateGraph.addEdge(START, \"%s\");%n", targetId));
 			}
 			else if ("end".equals(targetType)) {
-				sb.append(String.format("        stateGraph.addEdge(\"%s\", END);%n", sourceId));
+				sb.append(String.format("stateGraph.addEdge(\"%s\", END);%n", sourceId));
 			}
 			else {
-				sb.append(String.format("        stateGraph.addEdge(\"%s\", \"%s\");%n", sourceId, targetId));
+				sb.append(String.format("stateGraph.addEdge(\"%s\", \"%s\");%n", sourceId, targetId));
 			}
 		}
 
@@ -198,8 +202,7 @@ public class WorkflowProjectGenerator implements ProjectGenerator {
 			for (Edge e : condEdges) {
 				String conditionKey = resolveConditionKey(sourceData, e.getSourceHandle());
 				String targetId = e.getTarget();
-				conditions.add(String.format("            	if (value.contains(\"%s\")) return \"%s\";", conditionKey,
-						conditionKey));
+				conditions.add(String.format("if (value.contains(\"%s\")) return \"%s\";", conditionKey, conditionKey));
 				mappings.add(String.format("\"%s\", \"%s\"", conditionKey, targetId));
 			}
 

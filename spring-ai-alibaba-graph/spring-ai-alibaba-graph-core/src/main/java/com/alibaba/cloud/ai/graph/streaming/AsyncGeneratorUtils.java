@@ -15,16 +15,24 @@
  */
 package com.alibaba.cloud.ai.graph.streaming;
 
-import org.bsc.async.AsyncGenerator;
+import com.alibaba.cloud.ai.graph.*;
+import com.alibaba.cloud.ai.graph.async.AsyncGenerator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
+import java.util.HashMap;
+import java.util.ArrayList;
 
 /**
  * Utility class for handling asynchronous generator merging and output processing
  */
 public class AsyncGeneratorUtils {
+
+	private static final Logger log = LoggerFactory.getLogger(AsyncGeneratorUtils.class);
 
 	/**
 	 * Creates an appropriate generator based on the number of generator entries
@@ -33,7 +41,8 @@ public class AsyncGeneratorUtils {
 	 * @return single generator or merged generator
 	 */
 	@SuppressWarnings("unchecked")
-	public static <T> AsyncGenerator<T> createAppropriateGenerator(List<Map.Entry<String, Object>> generatorEntries) {
+	public static <T> AsyncGenerator<T> createAppropriateGenerator(List<Map.Entry<String, Object>> generatorEntries,
+			List<AsyncGenerator<T>> asyncNodeGenerators, Map<String, KeyStrategy> keyStrategyMap) {
 		if (generatorEntries.size() == 1) {
 			// Only one generator, return it directly
 			return (AsyncGenerator<T>) generatorEntries.get(0).getValue();
@@ -43,8 +52,8 @@ public class AsyncGeneratorUtils {
 		List<AsyncGenerator<T>> generators = generatorEntries.stream()
 			.map(entry -> (AsyncGenerator<T>) entry.getValue())
 			.collect(Collectors.toList());
-
-		return createMergedGenerator(generators);
+		generators.addAll(asyncNodeGenerators);
+		return createMergedGenerator(generators, keyStrategyMap);
 	}
 
 	/**
@@ -53,41 +62,123 @@ public class AsyncGeneratorUtils {
 	 * @param <T> output type
 	 * @return merged generator
 	 */
-	public static <T> AsyncGenerator<T> createMergedGenerator(List<AsyncGenerator<T>> generators) {
-		return new AsyncGenerator<T>() {
-			private int currentGeneratorIndex = 0;
+	public static <T> AsyncGenerator<T> createMergedGenerator(List<AsyncGenerator<T>> generators,
+			Map<String, KeyStrategy> keyStrategyMap) {
+		return new AsyncGenerator<>() {
+			private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
-			private boolean isDone = false;
+			private final ReentrantReadWriteLock.ReadLock readLock = lock.readLock();
+
+			private final ReentrantReadWriteLock.WriteLock writeLock = lock.writeLock();
+
+			private int currentIndex = 0;
+
+			private volatile Map<String, Object> mergedResult = new HashMap<>();
+
+			private volatile List<AsyncGenerator<T>> activeGenerators = new ArrayList<>(generators);
+
+			private final Map<AsyncGenerator<T>, Map<String, Object>> generatorResults = new HashMap<>();
 
 			@Override
 			public AsyncGenerator.Data<T> next() {
-				if (isDone) {
-					return AsyncGenerator.Data.done();
+				readLock.lock();
+				try {
+					if (activeGenerators.isEmpty()) {
+						return AsyncGenerator.Data.done(mergedResult);
+					}
+				}
+				finally {
+					readLock.unlock();
 				}
 
-				// Poll all generators in round-robin fashion
-				int startIndex = currentGeneratorIndex;
-				do {
-					AsyncGenerator<T> currentGenerator = generators.get(currentGeneratorIndex);
-					AsyncGenerator.Data<T> data = currentGenerator.next();
+				writeLock.lock();
+				try {
+					// Track whether we've found an active generator with data
+					boolean foundData = false;
 
-					// If current generator has data, return it
-					if (!data.isDone()) {
-						// Update index for next generator to process
-						currentGeneratorIndex = (currentGeneratorIndex + 1) % generators.size();
+					// Use a fixed number of attempts to avoid infinite loops
+					int attempts = 0;
+					final int MAX_ATTEMPTS = activeGenerators.size() * 2; // Allow two
+																			// full cycles
+
+					while (attempts < MAX_ATTEMPTS && !activeGenerators.isEmpty()) {
+						AsyncGenerator<T> current = activeGenerators.get(currentIndex);
+						AsyncGenerator.Data<T> data = current.next();
+
+						// Handle error state - remove generator and update merged result
+						if (data.isError()) {
+							log.debug("Removing errored generator: {}", current);
+							handleCompletedGenerator(current, data);
+							currentIndex = (currentIndex + 1) % Math.max(1, activeGenerators.size());
+							attempts++;
+							continue;
+						}
+
+						// Handle completion - remove generator and update merged result
+						if (data.isDone()) {
+							log.debug("Generator completed: {}", current);
+							handleCompletedGenerator(current, data);
+							currentIndex = (currentIndex + 1) % Math.max(1, activeGenerators.size());
+							attempts++;
+							continue;
+						}
+
+						// If we get here, the generator has valid data
+						foundData = true;
+
+						// Process and store the result
+						Object result = data.resultValue();
+						if (result instanceof Map) {
+							@SuppressWarnings("unchecked")
+							Map<String, Object> mapResult = (Map<String, Object>) result;
+
+							// Store per-generator results
+							generatorResults.computeIfAbsent(current, k -> new HashMap<>()).putAll(mapResult);
+
+							// Update merged result using key strategy
+							mergedResult = OverAllState.updateState(mergedResult, mapResult, keyStrategyMap);
+						}
+
+						// Move index for round-robin processing
+						currentIndex = (currentIndex + 1) % activeGenerators.size();
 						return data;
 					}
 
-					// Move to next generator
-					currentGeneratorIndex = (currentGeneratorIndex + 1) % generators.size();
-
-					// If all generators have been checked and none has data, complete
-					if (currentGeneratorIndex == startIndex) {
-						isDone = true;
-						return AsyncGenerator.Data.done();
+					// If we looped through all generators without finding data
+					if (!foundData && activeGenerators.isEmpty()) {
+						return AsyncGenerator.Data.done(mergedResult);
 					}
+
+					// If we've attempted too many times but still have active generators
+					if (attempts >= MAX_ATTEMPTS && !activeGenerators.isEmpty()) {
+						log.warn("Reached max attempts while {} generators remain active", activeGenerators.size());
+						return AsyncGenerator.Data.done(mergedResult);
+					}
+
+					// This should not happen, but as a fallback
+					return AsyncGenerator.Data.done(mergedResult);
 				}
-				while (true);
+				finally {
+					writeLock.unlock();
+				}
+			}
+
+			/**
+			 * Helper method to handle completed or errored generators
+			 */
+			private void handleCompletedGenerator(AsyncGenerator<T> generator, AsyncGenerator.Data<T> data) {
+				activeGenerators.remove(generator);
+
+				// Process result if exists
+				Object result = data.resultValue();
+				if (result instanceof Map) {
+					@SuppressWarnings("unchecked")
+					Map<String, Object> mapResult = (Map<String, Object>) result;
+					mergedResult = OverAllState.updateState(mergedResult, mapResult, keyStrategyMap);
+				}
+
+				// Remove from generator results if present
+				generatorResults.remove(generator);
 			}
 		};
 	}
