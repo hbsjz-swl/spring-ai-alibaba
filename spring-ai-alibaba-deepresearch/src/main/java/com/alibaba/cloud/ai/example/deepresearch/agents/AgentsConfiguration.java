@@ -17,18 +17,22 @@
 package com.alibaba.cloud.ai.example.deepresearch.agents;
 
 import com.alibaba.cloud.ai.example.deepresearch.config.PythonCoderProperties;
+import com.alibaba.cloud.ai.example.deepresearch.tool.McpClientToolCallbackProvider;
 import com.alibaba.cloud.ai.example.deepresearch.tool.PythonReplTool;
+import com.alibaba.cloud.ai.toolcalling.jinacrawler.JinaCrawlerConstants;
+import com.alibaba.cloud.ai.toolcalling.tavily.TavilySearchConstants;
+import lombok.SneakyThrows;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
-import org.springframework.util.Assert;
-import org.springframework.util.StreamUtils;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.Charset;
+import java.util.Arrays;
+import java.util.Set;
 
 @Configuration
 public class AgentsConfiguration {
@@ -39,26 +43,35 @@ public class AgentsConfiguration {
 	@Value("classpath:prompts/coder.md")
 	private Resource coderPrompt;
 
+	private final ApplicationContext context;
+
+	public AgentsConfiguration(ApplicationContext context) {
+		this.context = context;
+	}
+
+	/**
+	 * Return the tool name array that have corresponding beans.
+	 */
+	private String[] getAvailableTools(String... toolNames) {
+		return Arrays.stream(toolNames).filter(context::containsBean).toArray(String[]::new);
+	}
+
 	/**
 	 * Create Research Agent ChatClient Bean
 	 * @param chatClientBuilder ChatClientBuilder McpAsyncClient and the locally configure
 	 * ToolCallbackProviders.
 	 * @return ChatClient
 	 */
+	@SneakyThrows
 	@Bean
-	public ChatClient researchAgent(ChatClient.Builder chatClientBuilder) {
-		Assert.notNull(researcherPrompt, "researcherPrompt cannot be null");
-		try (InputStream inputStream = researcherPrompt.getInputStream()) {
-			var template = StreamUtils.copyToString(inputStream, Charset.defaultCharset());
-			Assert.hasText(template, "template cannot be null or empty");
-			return chatClientBuilder.defaultSystem(template)
-					.defaultToolNames("tavilySearch")
-					// .defaultToolNames("tavilySearch", "firecrawlFunction") todo 待调整
-					.build();
-		}
-		catch (IOException ex) {
-			throw new RuntimeException("Failed to read resource", ex);
-		}
+
+	public ChatClient researchAgent(ChatClient.Builder chatClientBuilder,
+			McpClientToolCallbackProvider mcpClientToolCallbackProvider) {
+		Set<ToolCallback> defineCallback = mcpClientToolCallbackProvider.findToolCallbacks("researchAgent");
+		return chatClientBuilder.defaultSystem(researcherPrompt.getContentAsString(Charset.defaultCharset()))
+			.defaultToolNames(this.getAvailableTools(TavilySearchConstants.TOOL_NAME, JinaCrawlerConstants.TOOL_NAME))
+			.defaultToolCallbacks(defineCallback.toArray(ToolCallback[]::new))
+			.build();
 	}
 
 	/**
@@ -67,19 +80,15 @@ public class AgentsConfiguration {
 	 * ToolCallbackProviders.
 	 * @return ChatClient
 	 */
+	@SneakyThrows
 	@Bean
-	public ChatClient coderAgent(ChatClient.Builder chatClientBuilder, PythonCoderProperties coderProperties) {
-		Assert.notNull(coderPrompt, "coderPrompt cannot be null");
-		try (InputStream inputStream = coderPrompt.getInputStream()) {
-			var template = StreamUtils.copyToString(inputStream, Charset.defaultCharset());
-			Assert.hasText(template, "template cannot be null or empty");
-			return chatClientBuilder.defaultSystem(template)
-					.defaultTools(new PythonReplTool(coderProperties))
-					.build();
-		}
-		catch (IOException ex) {
-			throw new RuntimeException("Failed to read resource", ex);
-		}
+	public ChatClient coderAgent(ChatClient.Builder chatClientBuilder, PythonCoderProperties coderProperties,
+			McpClientToolCallbackProvider mcpClientToolCallbackProvider) {
+		Set<ToolCallback> defineCallback = mcpClientToolCallbackProvider.findToolCallbacks("coderAgent");
+		return chatClientBuilder.defaultSystem(coderPrompt.getContentAsString(Charset.defaultCharset()))
+			.defaultTools(new PythonReplTool(coderProperties))
+			.defaultToolCallbacks(defineCallback.toArray(ToolCallback[]::new))
+			.build();
 	}
 
 }

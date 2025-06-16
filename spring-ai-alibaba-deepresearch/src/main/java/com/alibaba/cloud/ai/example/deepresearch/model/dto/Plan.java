@@ -142,6 +142,8 @@ public class Plan{
 		}
 
 
+		private String executionStatus;
+
 	}
 
 	public enum StepType {
